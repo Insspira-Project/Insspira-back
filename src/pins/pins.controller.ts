@@ -10,6 +10,7 @@ import { PinsGuardPage } from "src/common/guards/guard.pin";
 import { CheckLimit } from "src/common/decorators/decorator.pin";
 import { ActionType } from "src/pins.enum";
 import { LimitInterceptor } from "src/common/interceptors/interceptor.pin";
+import { OptionalJwtAuthGuard } from 'src/common/guards/optional-jwt.guard';
 
 
 @ApiTags('Pins')
@@ -28,15 +29,35 @@ export class PinsController {
     }
 
     // Public list / get
+    @UseGuards(OptionalJwtAuthGuard)
     @Get()
     @ApiOperation({ summary: 'List pins (paginated)' })
     @ApiQuery({ name: 'page', required: false, example: 1 })
     @ApiQuery({ name: 'limit', required: false, example: 20 })
     @ApiOkResponse({ type: Pin, isArray: true })
-    async getAllPins(@Query('page') page: number = 1, @Query('limit') limit: number = 20) {
-      return await this.service.getPinsService(page, limit);
+    async getAllPins(
+      @Query('page') page: number = 1, 
+      @Query('limit') limit: number = 20,
+      @Req() req: any
+    ) {
+      // ✅ req.user existirá SOLO si hay un token válido
+      const userId = req.user?.sub;
+      
+      console.log('🔍 getAllPins - UserId:', userId ? userId.substring(0, 8) + '...' : 'ANONYMOUS');
+      
+      const pins = await this.service.getPinsService(page, limit, userId);
+      
+      if (pins.length > 0) {
+        console.log('📤 First pin:', {
+          id: pins[0].id.substring(0, 8) + '...',
+          liked: pins[0].liked,
+          likesCount: pins[0].likesCount
+        });
+      }
+      
+      return pins;
     }
-
+    
     @Get('/:id')
     @ApiOperation({ summary: 'Get pin by id' })
     @ApiParam({ name: 'id', format: 'uuid' })

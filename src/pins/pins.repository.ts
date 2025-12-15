@@ -63,50 +63,38 @@ export class PinsRepository {
     // Create PINS Repository
 
     async getPins(page: number, limit: number, userId?: string): Promise<any[]> {
-        const query = this.pinsRepo
-          .createQueryBuilder('pin')
-          .leftJoinAndSelect('pin.hashtags', 'hashtags')
-          .leftJoinAndSelect('pin.user', 'user')
-          .orderBy('pin.createdAt', 'DESC')
-          .skip((page - 1) * limit)
-          .take(limit);
-      
-        const pins = await query.getMany();
-      
-        // ✅ Si hay userId, verificar qué pins tienen like del usuario
-        if (userId) {
-          const pinIds = pins.map(p => p.id);
-          
-          if (pinIds.length === 0) {
-            return [];
-          }
-      
-          const userLikes = await this.likeRepo.find({
-            where: {
-              user: { id: userId },
-              pin: { id: In(pinIds) }
-            },
-            relations: ['pin']
-          });
-      
-          const likedPinIds = new Set(userLikes.map(like => like.pin.id));
-      
-          return pins.map(pin => ({
-            id: pin.id,
-            image: pin.image,
-            description: pin.description,
-            likesCount: pin.likesCount,
-            commentsCount: pin.commentsCount,
-            viewsCount: pin.viewsCount,
-            createdAt: pin.createdAt,
-            liked: likedPinIds.has(pin.id), // ✅ Indica si el usuario dio like
-            user: pin.user.username,
-            hashtag: pin.hashtags,
-            views: pin.viewsCount
-          }));
+      const query = this.pinsRepo
+        .createQueryBuilder('pin')
+        .leftJoinAndSelect('pin.hashtags', 'hashtags')
+        .leftJoinAndSelect('pin.user', 'user')
+        .orderBy('pin.createdAt', 'DESC')
+        .skip((page - 1) * limit)
+        .take(limit);
+    
+      const pins = await query.getMany();
+    
+      // ✅ Si hay userId, verificar qué pins tienen like del usuario
+      if (userId) {
+        console.log('🔍 Buscando likes del usuario:', userId.substring(0, 8) + '...');
+        
+        const pinIds = pins.map(p => p.id);
+        
+        if (pinIds.length === 0) {
+          return [];
         }
-      
-        // ✅ Sin usuario autenticado, todos los likes son false
+    
+        const userLikes = await this.likeRepo.find({
+          where: {
+            user: { id: userId },
+            pin: { id: In(pinIds) }
+          },
+          relations: ['pin']
+        });
+    
+        console.log('❤️ Likes encontrados:', userLikes.length);
+        
+        const likedPinIds = new Set(userLikes.map(like => like.pin.id));
+    
         return pins.map(pin => ({
           id: pin.id,
           image: pin.image,
@@ -115,13 +103,28 @@ export class PinsRepository {
           commentsCount: pin.commentsCount,
           viewsCount: pin.viewsCount,
           createdAt: pin.createdAt,
-          liked: false, // ✅ Usuario no autenticado = no likes
+          liked: likedPinIds.has(pin.id), // ✅ Indica si el usuario dio like
           user: pin.user.username,
           hashtag: pin.hashtags,
           views: pin.viewsCount
         }));
       }
-
+    
+      // ✅ Sin usuario autenticado, todos los likes son false
+      return pins.map(pin => ({
+        id: pin.id,
+        image: pin.image,
+        description: pin.description,
+        likesCount: pin.likesCount,
+        commentsCount: pin.commentsCount,
+        viewsCount: pin.viewsCount,
+        createdAt: pin.createdAt,
+        liked: false, // ✅ Usuario no autenticado = no likes
+        user: pin.user.username,
+        hashtag: pin.hashtags,
+        views: pin.viewsCount
+      }));
+    }
  
 
     async pinsId(id: string) {
@@ -261,60 +264,80 @@ export class PinsRepository {
     // Create Like PINS Repository
     
 
-    async createLike(idPin:string, idUser: string) {
-
-            
-    const pin = await this.pinsRepo.findOne({ where: { id: idPin }, relations: ['user']});
-    if (!pin) throw new NotFoundException('Pin not found');
+    async createLike(idPin: string, idUser: string) {
+      const pin = await this.pinsRepo.findOne({ 
+        where: { id: idPin }, 
+        relations: ['user']
+      });
+      
+      if (!pin) throw new NotFoundException('Pin not found');
+      
+      const user = await this.userRepo.findOne({ where: { id: idUser } });
+      if (!user) throw new NotFoundException("User not found.");
     
-    const user = await this.userRepo.findOne({where: {id: idUser}})
-            if(!user) throw new NotFoundException("User not found.")
-
-
-
-    const existingLike = await this.likeRepo.findOne({
-        where: { pin: { id: pin.id }, user: { id: user.id }},
-    });
-
-    if (existingLike) {
-
+      // ✅ CRÍTICO: Buscar like existente
+      const existingLike = await this.likeRepo.findOne({
+        where: { 
+          pin: { id: pin.id }, 
+          user: { id: user.id }
+        }
+      });
+    
+      if (existingLike) {
+        // Unlike
+        console.log('👎 Removing like from user:', user.id.substring(0, 8));
         await this.likeRepo.remove(existingLike);
         await this.pinsRepo.decrement({ id: pin.id }, 'likesCount', 1);
-        return false; 
+        return { liked: false, likesCount: Math.max(pin.likesCount - 1, 0) };
+      }
+    
+      // Like
+      console.log('👍 Adding like from user:', user.id.substring(0, 8));
+      const newLike = this.likeRepo.create({ pin, user });
+      await this.likeRepo.save(newLike);
+      
+      // ✅ Enviar notificación solo si NO es el propio usuario
+      if (pin.user.id !== user.id) {
+        await this.notificationsService.sendActivity({
+          recipientEmail: pin.user.email,
+          type: 'like',
+          photoTitle: pin.description
+        });
+      }
+      
+      await this.pinsRepo.increment({ id: pin.id }, 'likesCount', 1);
+      return { liked: true, likesCount: pin.likesCount + 1 };
     }
 
-    const newLike = this.likeRepo.create({ pin, user});
-    await this.likeRepo.save(newLike);
-    await this.notificationsService.sendActivity({
-        recipientEmail: pin.user.email,
-        type: 'like',
-        photoTitle: pin.description
-    });
-    await this.pinsRepo.increment({ id: pin.id }, 'likesCount', 1);
-    return true; 
-    }
-
-    async likeStatus(pinId: string, userId: any) {
-    const user = await this.userRepo.findOne({where: {id: userId}})
-    if(!user) throw new NotFoundException("User not found.")
-    
-    const pin = await this.pinsRepo.findOne({ where: { id: pinId }, relations: ['user', "likes"]});
-    if (!pin) throw new NotFoundException('Pin not found');
-    
-    const existingLike = await this.likeRepo.findOne({
-        where: { pin: { id: pin.id }, user: { id: user.id } },
-        relations: ["pin"]
-    });
-    
-    return { 
+    async likeStatus(pinId: string, userId: string) {
+      const user = await this.userRepo.findOne({ where: { id: userId } });
+      if (!user) throw new NotFoundException("User not found.");
+      
+      const pin = await this.pinsRepo.findOne({ 
+        where: { id: pinId }
+      });
+      if (!pin) throw new NotFoundException('Pin not found');
+      
+      // ✅ Verificar si existe un like de este usuario para este pin
+      const existingLike = await this.likeRepo.findOne({
+        where: { 
+          pin: { id: pin.id }, 
+          user: { id: user.id } 
+        }
+      });
+      
+      console.log('🔍 likeStatus -', {
+        pinId: pinId.substring(0, 8) + '...',
+        userId: userId.substring(0, 8) + '...',
         liked: !!existingLike,
-        likesCount: existingLike?.pin.likesCount
-    };
-
-
+        likesCount: pin.likesCount
+      });
+      
+      return { 
+        liked: !!existingLike,
+        likesCount: pin.likesCount
+      };
     }
-
-
 
 
     // Create Comment PINS Repository
