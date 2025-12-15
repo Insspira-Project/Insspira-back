@@ -62,13 +62,64 @@ export class PinsRepository {
 
     // Create PINS Repository
 
-    async getPins(page: number, limit: number) {
-        return await this.pinsRepo.find({
-          skip: (page - 1) * limit,     
-          take: limit,
-          relations: ['hashtags'],      
-          order: { createdAt: "DESC" },
-        });
+    async getPins(page: number, limit: number, userId?: string): Promise<any[]> {
+        const query = this.pinsRepo
+          .createQueryBuilder('pin')
+          .leftJoinAndSelect('pin.hashtags', 'hashtags')
+          .leftJoinAndSelect('pin.user', 'user')
+          .orderBy('pin.createdAt', 'DESC')
+          .skip((page - 1) * limit)
+          .take(limit);
+      
+        const pins = await query.getMany();
+      
+        // ✅ Si hay userId, verificar qué pins tienen like del usuario
+        if (userId) {
+          const pinIds = pins.map(p => p.id);
+          
+          if (pinIds.length === 0) {
+            return [];
+          }
+      
+          const userLikes = await this.likeRepo.find({
+            where: {
+              user: { id: userId },
+              pin: { id: In(pinIds) }
+            },
+            relations: ['pin']
+          });
+      
+          const likedPinIds = new Set(userLikes.map(like => like.pin.id));
+      
+          return pins.map(pin => ({
+            id: pin.id,
+            image: pin.image,
+            description: pin.description,
+            likesCount: pin.likesCount,
+            commentsCount: pin.commentsCount,
+            viewsCount: pin.viewsCount,
+            createdAt: pin.createdAt,
+            liked: likedPinIds.has(pin.id), // ✅ Indica si el usuario dio like
+            user: pin.user.username,
+            hashtag: pin.hashtags,
+            views: pin.viewsCount
+          }));
+        }
+      
+        // ✅ Sin usuario autenticado, todos los likes son false
+        return pins.map(pin => ({
+          id: pin.id,
+          image: pin.image,
+          description: pin.description,
+          likesCount: pin.likesCount,
+          commentsCount: pin.commentsCount,
+          viewsCount: pin.viewsCount,
+          createdAt: pin.createdAt,
+          liked: false, // ✅ Usuario no autenticado = no likes
+          user: pin.user.username,
+          hashtag: pin.hashtags,
+          views: pin.viewsCount
+        }));
       }
 
  

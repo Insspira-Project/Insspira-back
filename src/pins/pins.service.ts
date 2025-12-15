@@ -16,9 +16,8 @@ export class PinsService {
     }
 
     // PINS 
-    async getPinsService(page: number, limit: number) {
-        
-        return await this.repository.getPins(page, limit)
+    async getPinsService(page: number, limit: number, userId?: string): Promise<any[]> {
+        return await this.repository.getPins(page, limit, userId);
     }
     
     async getPinsIdService(id: string) {
